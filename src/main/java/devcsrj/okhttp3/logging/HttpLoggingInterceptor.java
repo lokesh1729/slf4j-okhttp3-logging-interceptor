@@ -33,6 +33,8 @@ import org.slf4j.LoggerFactory;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static java.net.HttpURLConnection.HTTP_NOT_MODIFIED;
@@ -188,6 +190,16 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
     @Override
     public Response intercept(Chain chain) throws IOException {
+        List<String> headersToRemove = Arrays.asList(
+                "x-datadog-trace-id",
+                "x-datadog-tags",
+                "x-datadog-parent-id",
+                "Connection",
+                "traceparent",
+                "User-Agent",
+                "Content-Type",
+                "Content-Length"
+        );
         boolean logBody = logger.isDebugEnabled();
         boolean logHeaders = logBody || logger.isInfoEnabled();
 
@@ -202,24 +214,22 @@ public final class HttpLoggingInterceptor implements Interceptor {
         logger.info("--> {} {} {}", request.method(), request.url(), protocol);
 
         if (logHeaders) {
-            if (hasRequestBody) {
-                // Request body headers are only present when installed as a network interceptor.
-                // Force them to be included (when available) so there values are known.
-                if (requestBody.contentType() != null)
-                    logger.info("Content-Type: {}", requestBody.contentType());
-
-                if (requestBody.contentLength() != -1)
-                    logger.info("Content-Length: {}", requestBody.contentLength());
-            }
+//            if (hasRequestBody) {
+//                 Request body headers are only present when installed as a network interceptor.
+//                 Force them to be included (when available) so there values are known.
+//                if (requestBody.contentType() != null)
+//                    logger.info("Content-Type: {}", requestBody.contentType());
+//
+//                if (requestBody.contentLength() != -1)
+//                    logger.info("Content-Length: {}", requestBody.contentLength());
+//            }
 
             Headers headers = request.headers();
             for (int i = 0; i < headers.size(); i++) {
-                String name = headers.name(i);
+                if(!headersToRemove.contains(headers.name(i))) {
+                    logger.info("{}: {}", headers.name(i), headers.value(i));
+                }
 
-                // Skip headers from the request body as they are explicitly logged above.
-                if (!"Content-Type".equalsIgnoreCase(name)
-                        && !"Content-Length".equalsIgnoreCase(name))
-                    logger.info("{}: {}", name, headers.value(i));
             }
 
             if (!logBody || !hasRequestBody)
@@ -267,8 +277,11 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
         if (logHeaders) {
             Headers headers = response.headers();
-            for (int i = 0; i < headers.size(); i++)
-                logger.info("{}: {}", headers.name(i), headers.value(i));
+            for (int i = 0; i < headers.size(); i++) {
+                if(!headersToRemove.contains(headers.name(i))) {
+                    logger.info("{}: {}", headers.name(i), headers.value(i));
+                }
+            }
 
             if (!logBody || !hasBody(response))
                 logger.info("<-- END HTTP");
