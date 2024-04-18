@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.Charset;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -93,35 +93,44 @@ public final class HttpLoggingInterceptor implements Interceptor {
     private final Logger logger;
     private final long peekBodySize;
 
+    private List<String> headersToRemove;
+
     public HttpLoggingInterceptor() {
-        this(DEFAULT_LOGGER);
+        this(DEFAULT_LOGGER, Long.MAX_VALUE, new ArrayList<String>());
     }
 
     public HttpLoggingInterceptor(Logger logger) {
-        this(logger, Long.MAX_VALUE);
+        this(logger, Long.MAX_VALUE, new ArrayList<String>());
     }
 
-    /**
-     * @see #HttpLoggingInterceptor(Logger, long)
-     */
     public HttpLoggingInterceptor(long peekBodySize) {
-        this(DEFAULT_LOGGER, peekBodySize);
+        this(DEFAULT_LOGGER, peekBodySize, new ArrayList<String>());
     }
 
-    /**
-     * Creates an Slf4j logging interceptor instance.
-     *
-     * @param logger       The logger to be used
-     * @param peekBodySize The size to be logged when reading the response body. Defaults
-     *                     to {@code Long.MAX_VALUE}
-     */
+    public HttpLoggingInterceptor(List<String> headersToRemove) {
+        this(DEFAULT_LOGGER, Long.MAX_VALUE, headersToRemove);
+    }
+
+    public HttpLoggingInterceptor(Logger logger, List<String> headersToRemove) {
+        this(logger, Long.MAX_VALUE, headersToRemove);
+    }
+
     public HttpLoggingInterceptor(Logger logger, long peekBodySize) {
+        this(logger, peekBodySize, new ArrayList<String>());
+    }
+
+    public HttpLoggingInterceptor(long peekBodySize, List<String> headersToRemove) {
+        this(DEFAULT_LOGGER, peekBodySize, headersToRemove);
+    }
+
+    public HttpLoggingInterceptor(Logger logger, long peekBodySize, List<String> headersToRemove) {
         if (logger == null)
             throw new IllegalArgumentException("Can't use null logger");
         if (peekBodySize < 0)
             throw new IllegalArgumentException("peekBodySize can't be negative");
         this.logger = logger;
         this.peekBodySize = peekBodySize;
+        this.headersToRemove = headersToRemove;
     }
 
     /**
@@ -190,16 +199,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
     @Override
     public Response intercept(Chain chain) throws IOException {
-        List<String> headersToRemove = Arrays.asList(
-                "x-datadog-trace-id",
-                "x-datadog-tags",
-                "x-datadog-parent-id",
-                "Connection",
-                "traceparent",
-                "User-Agent",
-                "Content-Type",
-                "Content-Length"
-        );
+
         boolean logBody = logger.isDebugEnabled();
         boolean logHeaders = logBody || logger.isInfoEnabled();
 
@@ -214,28 +214,32 @@ public final class HttpLoggingInterceptor implements Interceptor {
         logger.info("--> {} {} {}", request.method(), request.url(), protocol);
 
         if (logHeaders) {
-//            if (hasRequestBody) {
+            if (hasRequestBody) {
 //                 Request body headers are only present when installed as a network interceptor.
 //                 Force them to be included (when available) so there values are known.
-//                if (requestBody.contentType() != null)
-//                    logger.info("Content-Type: {}", requestBody.contentType());
-//
-//                if (requestBody.contentLength() != -1)
-//                    logger.info("Content-Length: {}", requestBody.contentLength());
-//            }
+                if (requestBody.contentType() != null && !headersToRemove.contains("Content-Type"))
+                    logger.info("--> Content-Type: {}", requestBody.contentType());
+
+                if (requestBody.contentLength() != -1
+                        && !headersToRemove.contains("Content-Length")
+                )
+                    logger.info("--> Content-Length: {}", requestBody.contentLength());
+            }
 
             Headers headers = request.headers();
             for (int i = 0; i < headers.size(); i++) {
-                if(!headersToRemove.contains(headers.name(i))) {
-                    logger.info("{}: {}", headers.name(i), headers.value(i));
+                if (!headersToRemove.contains(headers.name(i))
+                        && !(headers.name(i).equalsIgnoreCase("Content-Type"))
+                        && !(headers.name(i).equalsIgnoreCase("Content-Length"))
+                ) {
+                    logger.info("--> {}: {}", headers.name(i), headers.value(i));
                 }
-
             }
 
             if (!logBody || !hasRequestBody)
-                logger.info("--> END {}", request.method());
+                logger.info("--> END {} {} {}", request.method(), request.url(), protocol);
             else if (bodyEncoded(request.headers()))
-                logger.info("--> END {} (encoded body omitted)", request.method());
+                logger.info("--> END {} {} {} (encoded body omitted)", request.method(), request.url(), protocol);
             else {
                 Buffer buffer = new Buffer();
                 requestBody.writeTo(buffer);
@@ -248,11 +252,9 @@ public final class HttpLoggingInterceptor implements Interceptor {
                 logger.debug(""); // new line
                 if (isPlaintext(buffer)) {
                     logger.debug(buffer.readString(charset));
-                    logger.debug("--> END {} ({}-byte body)",
-                            request.method(), requestBody.contentLength());
+                    logger.debug("--> END {} {} {} ({}-byte body)", request.method(), request.url(), protocol, requestBody.contentLength());
                 } else
-                    logger.debug("--> END {} (binary {}-byte body omitted",
-                            request.method(), requestBody.contentLength());
+                    logger.debug("--> END {} {} {} (binary {}-byte body omitted", request.method(), request.url(), protocol, requestBody.contentLength());
             }
         }
 
@@ -271,15 +273,15 @@ public final class HttpLoggingInterceptor implements Interceptor {
         long contentLength = responseBody.contentLength();
         String bodySize = contentLength != -1 ? contentLength + "-byte" : "unknown-length";
 
-        logger.info("<-- {} {} {} (took {} ms {})",
-                response.code(), response.message(), response.request().url(), tookMs,
+        logger.info("<-- {} {} {} {} (took {} ms {})",
+                response.code(), response.message(), response.request().url(), response.request().method(), tookMs,
                 !logHeaders ? ", " + bodySize + " body" : "");
 
         if (logHeaders) {
             Headers headers = response.headers();
             for (int i = 0; i < headers.size(); i++) {
-                if(!headersToRemove.contains(headers.name(i))) {
-                    logger.info("{}: {}", headers.name(i), headers.value(i));
+                if (!headersToRemove.contains(headers.name(i))) {
+                    logger.info("<-- {}: {}", headers.name(i), headers.value(i));
                 }
             }
 
