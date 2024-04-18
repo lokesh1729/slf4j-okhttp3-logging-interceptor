@@ -274,8 +274,9 @@ public final class HttpLoggingInterceptor implements Interceptor {
         String bodySize = contentLength != -1 ? contentLength + "-byte" : "unknown-length";
 
         logger.info("<-- {} {} {} {} (took {} ms {})",
-                response.code(), response.message(), response.request().url(), response.request().method(), tookMs,
-                !logHeaders ? ", " + bodySize + " body" : "");
+                response.code(), response.message(), response.request().method(), response.request().url(), tookMs,
+                !logHeaders ? ", " + bodySize + " body" : ""
+        );
 
         if (logHeaders) {
             Headers headers = response.headers();
@@ -286,9 +287,9 @@ public final class HttpLoggingInterceptor implements Interceptor {
             }
 
             if (!logBody || !hasBody(response))
-                logger.info("<-- END HTTP");
+                logger.info("<-- END HTTP {} {}", response.request().method(), response.request().url());
             else if (bodyEncoded(headers))
-                logger.info("<-- END HTTP (encoded body omitted)");
+                logger.info("<-- END HTTP (encoded body omitted) {} {}", response.request().method(), response.request().url());
             else {
                 BufferedSource source = responseBody.source();
                 source.request(peekBodySize);
@@ -301,7 +302,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
                 if (!isPlaintext(buffer)) {
                     logger.debug("");
-                    logger.debug("<-- END HTTP (binary {}-byte body omitted)", contentLength);
+                    logger.debug("<-- END HTTP (binary {}-byte body omitted) {} {}", contentLength, response.request().method(), response.request().url());
                     return response;
                 }
 
