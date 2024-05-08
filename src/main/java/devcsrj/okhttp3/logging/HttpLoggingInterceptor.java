@@ -33,8 +33,8 @@ import org.slf4j.LoggerFactory;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static java.net.HttpURLConnection.HTTP_NOT_MODIFIED;
@@ -93,37 +93,37 @@ public final class HttpLoggingInterceptor implements Interceptor {
     private final Logger logger;
     private final long peekBodySize;
 
-    private List<String> headersToRemove;
+    private Set<String> headersToRemove;
 
     public HttpLoggingInterceptor() {
-        this(DEFAULT_LOGGER, Long.MAX_VALUE, new ArrayList<String>());
+        this(DEFAULT_LOGGER, Long.MAX_VALUE, new HashSet<String>());
     }
 
     public HttpLoggingInterceptor(Logger logger) {
-        this(logger, Long.MAX_VALUE, new ArrayList<String>());
+        this(logger, Long.MAX_VALUE, new HashSet<String>());
     }
 
     public HttpLoggingInterceptor(long peekBodySize) {
-        this(DEFAULT_LOGGER, peekBodySize, new ArrayList<String>());
+        this(DEFAULT_LOGGER, peekBodySize, new HashSet<String>());
     }
 
-    public HttpLoggingInterceptor(List<String> headersToRemove) {
+    public HttpLoggingInterceptor(Set<String> headersToRemove) {
         this(DEFAULT_LOGGER, Long.MAX_VALUE, headersToRemove);
     }
 
-    public HttpLoggingInterceptor(Logger logger, List<String> headersToRemove) {
+    public HttpLoggingInterceptor(Logger logger, Set<String> headersToRemove) {
         this(logger, Long.MAX_VALUE, headersToRemove);
     }
 
     public HttpLoggingInterceptor(Logger logger, long peekBodySize) {
-        this(logger, peekBodySize, new ArrayList<String>());
+        this(logger, peekBodySize, new HashSet<String>());
     }
 
-    public HttpLoggingInterceptor(long peekBodySize, List<String> headersToRemove) {
+    public HttpLoggingInterceptor(long peekBodySize, Set<String> headersToRemove) {
         this(DEFAULT_LOGGER, peekBodySize, headersToRemove);
     }
 
-    public HttpLoggingInterceptor(Logger logger, long peekBodySize, List<String> headersToRemove) {
+    public HttpLoggingInterceptor(Logger logger, long peekBodySize, Set<String> headersToRemove) {
         if (logger == null)
             throw new IllegalArgumentException("Can't use null logger");
         if (peekBodySize < 0)
