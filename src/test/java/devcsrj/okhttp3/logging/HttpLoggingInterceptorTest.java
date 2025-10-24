@@ -26,6 +26,9 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Arrays;
 
 import static org.junit.Assert.assertNotEquals;
 
@@ -55,6 +58,70 @@ public class HttpLoggingInterceptorTest {
         try (ResponseBody body = response.body()) {
             InputStream inputStream = body.byteStream();
             assertNotEquals(inputStream.available(), 0); // body must still be readable
+        }
+    }
+    
+    @Test
+    public void testInterceptWithHeaderExclusion() throws IOException {
+        MockWebServer server = new MockWebServer();
+        Buffer buffer = new Buffer();
+        buffer.writeUtf8("{\"status\":\"ok\"}");
+
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Authorization", "Bearer secret-token")
+                .addHeader("X-API-Key", "secret-api-key")
+                .addHeader("Content-Type", "application/json")
+                .setBody(buffer));
+
+        // Create interceptor that excludes sensitive headers
+        Set<String> headersToRemove = new HashSet<>(Arrays.asList("Authorization", "X-API-Key"));
+        OkHttpClient client = new OkHttpClient.Builder()
+                .addInterceptor(new HttpLoggingInterceptor(headersToRemove))
+                .build();
+        
+        Request request = new Request.Builder()
+                .get()
+                .url(server.url("/api/test"))
+                .addHeader("Authorization", "Bearer client-secret")
+                .addHeader("X-API-Key", "client-api-key")
+                .addHeader("Accept", "application/json")
+                .build();
+
+        Response response = client.newCall(request).execute();
+        try (ResponseBody body = response.body()) {
+            assertNotEquals(body.string().length(), 0); // body must still be readable
+        }
+    }
+    
+    @Test
+    public void testCaseInsensitiveHeaderExclusion() throws IOException {
+        MockWebServer server = new MockWebServer();
+        Buffer buffer = new Buffer();
+        buffer.writeUtf8("OK");
+
+        server.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .addHeader("authorization", "Bearer secret")
+                .addHeader("CONTENT-TYPE", "text/plain")
+                .setBody(buffer));
+
+        // Create interceptor with mixed case header names
+        Set<String> headersToRemove = new HashSet<>(Arrays.asList("AUTHORIZATION", "content-type"));
+        OkHttpClient client = new OkHttpClient.Builder()
+                .addInterceptor(new HttpLoggingInterceptor(headersToRemove))
+                .build();
+        
+        Request request = new Request.Builder()
+                .get()
+                .url(server.url("/test"))
+                .addHeader("Authorization", "Bearer token")
+                .addHeader("Content-Type", "text/plain")
+                .build();
+
+        Response response = client.newCall(request).execute();
+        try (ResponseBody body = response.body()) {
+            assertNotEquals(body.string().length(), 0);
         }
     }
 }

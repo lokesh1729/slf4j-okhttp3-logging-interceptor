@@ -35,6 +35,9 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collections;
 
 import static java.net.HttpURLConnection.HTTP_NOT_MODIFIED;
 import static java.net.HttpURLConnection.HTTP_NO_CONTENT;
@@ -55,6 +58,8 @@ import static okhttp3.internal.http.StatusLine.HTTP_CONTINUE;
  *   <li>{@code DEBUG}: When enabled, also logs request and response bodies for all requests.</li>
  *   <li>{@code ERROR}: Used for logging HTTP failures when exceptions occur.</li>
  * </ul>
+ * <p>
+ * Headers can be excluded from logging by providing a set of header names to remove.
  * <p>
  * Example output:
  * <pre>{@code
@@ -87,26 +92,44 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
     private final Logger logger;
     private final long peekBodySize;
+    private final Set<String> headersToRemove;
 
     public HttpLoggingInterceptor() {
-        this(DEFAULT_LOGGER, Long.MAX_VALUE);
+        this(DEFAULT_LOGGER, Long.MAX_VALUE, Collections.emptySet());
     }
 
     public HttpLoggingInterceptor(Logger logger) {
-        this(logger, Long.MAX_VALUE);
+        this(logger, Long.MAX_VALUE, Collections.emptySet());
     }
 
     public HttpLoggingInterceptor(long peekBodySize) {
-        this(DEFAULT_LOGGER, peekBodySize);
+        this(DEFAULT_LOGGER, peekBodySize, Collections.emptySet());
+    }
+    
+    public HttpLoggingInterceptor(Set<String> headersToRemove) {
+        this(DEFAULT_LOGGER, Long.MAX_VALUE, headersToRemove);
     }
 
-    public HttpLoggingInterceptor(Logger logger, long peekBodySize) {
+    public HttpLoggingInterceptor(Logger logger, Set<String> headersToRemove) {
+        this(logger, Long.MAX_VALUE, headersToRemove);
+    }
+
+    public HttpLoggingInterceptor(Logger logger, long peekBodySize, Set<String> headersToRemove) {
         if (logger == null)
             throw new IllegalArgumentException("Can't use null logger");
         if (peekBodySize < 0)
             throw new IllegalArgumentException("peekBodySize can't be negative");
+        if (headersToRemove == null)
+            throw new IllegalArgumentException("headersToRemove can't be null");
         this.logger = logger;
         this.peekBodySize = peekBodySize;
+        // Create a case-insensitive set for header names
+        this.headersToRemove = new HashSet<>();
+        for (String header : headersToRemove) {
+            if (header != null) {
+                this.headersToRemove.add(header.toLowerCase());
+            }
+        }
     }
 
     /**
@@ -172,6 +195,14 @@ public final class HttpLoggingInterceptor implements Interceptor {
             return -1;
         }
     }
+    
+    /**
+     * Checks if a header should be included in logging.
+     * Returns false if the header is in the exclusion list (case-insensitive comparison).
+     */
+    private boolean shouldIncludeHeader(String headerName) {
+        return !headersToRemove.contains(headerName.toLowerCase());
+    }
 
     @Override
     public Response intercept(Chain chain) throws IOException {
@@ -192,12 +223,15 @@ public final class HttpLoggingInterceptor implements Interceptor {
         logBuilder.append("Request URL = ").append(request.url()).append("\n");
         logBuilder.append("Protocol = ").append(protocol).append("\n");
 
-        // Log request headers
+        // Log request headers (excluding those in headersToRemove)
         Headers headers = request.headers();
         if (headers.size() > 0) {
             logBuilder.append("Request Headers:\n");
             for (int i = 0; i < headers.size(); i++) {
-                logBuilder.append("  ").append(headers.name(i)).append(": ").append(headers.value(i)).append("\n");
+                String headerName = headers.name(i);
+                if (shouldIncludeHeader(headerName)) {
+                    logBuilder.append("  ").append(headerName).append(": ").append(headers.value(i)).append("\n");
+                }
             }
         }
 
@@ -249,12 +283,15 @@ public final class HttpLoggingInterceptor implements Interceptor {
         logBuilder.append("Response Message = ").append(response.message()).append("\n");
         logBuilder.append("Time = ").append(tookMs).append(" ms\n");
 
-        // Log response headers
+        // Log response headers (excluding those in headersToRemove)
         Headers responseHeaders = response.headers();
         if (responseHeaders.size() > 0) {
             logBuilder.append("Response Headers:\n");
             for (int i = 0; i < responseHeaders.size(); i++) {
-                logBuilder.append("  ").append(responseHeaders.name(i)).append(": ").append(responseHeaders.value(i)).append("\n");
+                String headerName = responseHeaders.name(i);
+                if (shouldIncludeHeader(headerName)) {
+                    logBuilder.append("  ").append(headerName).append(": ").append(responseHeaders.value(i)).append("\n");
+                }
             }
         }
 
