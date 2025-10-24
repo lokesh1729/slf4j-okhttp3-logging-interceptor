@@ -187,7 +187,7 @@ public final class HttpLoggingInterceptor implements Interceptor {
         Protocol protocol = connection != null ? connection.protocol() : Protocol.HTTP_1_1;
 
         // Build request log
-        logBuilder.append("--> REQUEST\n");
+        logBuilder.append("\n--> REQUEST\n");
         logBuilder.append("Request Method = ").append(request.method()).append("\n");
         logBuilder.append("Request URL = ").append(request.url()).append("\n");
         logBuilder.append("Protocol = ").append(protocol).append("\n");
@@ -205,12 +205,6 @@ public final class HttpLoggingInterceptor implements Interceptor {
         if (hasRequestBody) {
             // Request body headers are only present when installed as a network interceptor.
             // Force them to be included (when available) so there values are known.
-            if (requestBody.contentType() != null) {
-                logBuilder.append("Content-Type = ").append(requestBody.contentType()).append("\n");
-            }
-            if (requestBody.contentLength() != -1) {
-                logBuilder.append("Content-Length = ").append(requestBody.contentLength()).append("\n");
-            }
 
             if (logBody && !bodyEncoded(request.headers())) {
                 Buffer buffer = new Buffer();
