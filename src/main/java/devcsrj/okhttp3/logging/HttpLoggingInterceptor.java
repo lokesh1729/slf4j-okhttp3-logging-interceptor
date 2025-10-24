@@ -15,6 +15,7 @@
  */
 package devcsrj.okhttp3.logging;
 
+import java.nio.charset.StandardCharsets;
 import okhttp3.Connection;
 import okhttp3.Headers;
 import okhttp3.Interceptor;
@@ -33,8 +34,6 @@ import org.slf4j.LoggerFactory;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.Charset;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static java.net.HttpURLConnection.HTTP_NOT_MODIFIED;
@@ -42,95 +41,72 @@ import static java.net.HttpURLConnection.HTTP_NO_CONTENT;
 import static okhttp3.internal.http.StatusLine.HTTP_CONTINUE;
 
 /**
- * An OkHttp interceptor that logs request and response information. Can be applied as an
- * {@linkplain OkHttpClient#interceptors() application interceptor} or as a
+ * An OkHttp interceptor that logs request and response information as a single consolidated log entry.
+ * Can be applied as an {@linkplain OkHttpClient#interceptors() application interceptor} or as a
  * {@linkplain OkHttpClient#networkInterceptors() network interceptor}.
  * <p>
- * The log levels written are as follows:
+ * The interceptor uses StringBuilder to accumulate all log information and outputs it as a single
+ * log entry, making it easier to correlate request and response data.
  * <p>
- * {@code DEBUG}: Logs request and response lines and their respective headers and bodies
- * (if present).
+ * Log levels:
+ * <ul>
+ *   <li>{@code INFO}: Logs request and response information including headers. Response body is
+ *       logged for failed requests (non-2xx status codes) regardless of log level.</li>
+ *   <li>{@code DEBUG}: When enabled, also logs request and response bodies for all requests.</li>
+ *   <li>{@code ERROR}: Used for logging HTTP failures when exceptions occur.</li>
+ * </ul>
+ * <p>
+ * Example output:
  * <pre>{@code
- *  --> POST /greeting http/1.1
- *  Host: example.com
- *  Content-Type: plain/text
- *  Content-Length: 3
- *
- *  Hi?
- *  --> END POST
- *
- *  <-- 200 OK (22ms)
- *  Content-Type: plain/text
- *  Content-Length: 6
- *
- *  Hello!
- *  <-- END HTTP
+ * --> REQUEST
+ * Request Method = POST
+ * Request URL = https://example.com/greeting
+ * Protocol = http/1.1
+ * Request Headers:
+ *   Host: example.com
+ *   Content-Type: plain/text
+ * Content-Type = plain/text
+ * Content-Length = 3
+ * Request Body = Hi?
+ * <-- RESPONSE
+ * Response Code = 200
+ * Response Message = OK
+ * Time = 22 ms
+ * Response Headers:
+ *   Content-Type: plain/text
+ *   Content-Length: 6
+ * Response Body = Hello!
  * }</pre>
- * <p>
- * {@code INFO}: Logs request and response lines and their respective headers.
- * <pre>{@code
- *  --> POST /greeting http/1.1
- *  Host: example.com
- *  Content-Type: plain/text
- *  Content-Length: 3
- *  --> END POST
- *
- *  <-- 200 OK (22ms)
- *  Content-Type: plain/text
- *  Content-Length: 6
- *  <-- END HTTP
- * }</pre>
- * <p>
- * Other log levels, such as {@code WARN} and {@code ERROR}, are ignored.
  */
 public final class HttpLoggingInterceptor implements Interceptor {
 
     public static final String DEFAULT_LOGGER_NAME = "okhttp3.logging.wire";
 
-    private static final Charset UTF8 = Charset.forName("UTF-8");
+    private static final Charset UTF8 = StandardCharsets.UTF_8;
     private static final Logger DEFAULT_LOGGER = LoggerFactory.getLogger(DEFAULT_LOGGER_NAME);
 
     private final Logger logger;
     private final long peekBodySize;
 
-    private Set<String> headersToRemove;
-
     public HttpLoggingInterceptor() {
-        this(DEFAULT_LOGGER, Long.MAX_VALUE, new HashSet<String>());
+        this(DEFAULT_LOGGER, Long.MAX_VALUE);
     }
 
     public HttpLoggingInterceptor(Logger logger) {
-        this(logger, Long.MAX_VALUE, new HashSet<String>());
+        this(logger, Long.MAX_VALUE);
     }
 
     public HttpLoggingInterceptor(long peekBodySize) {
-        this(DEFAULT_LOGGER, peekBodySize, new HashSet<String>());
-    }
-
-    public HttpLoggingInterceptor(Set<String> headersToRemove) {
-        this(DEFAULT_LOGGER, Long.MAX_VALUE, headersToRemove);
-    }
-
-    public HttpLoggingInterceptor(Logger logger, Set<String> headersToRemove) {
-        this(logger, Long.MAX_VALUE, headersToRemove);
+        this(DEFAULT_LOGGER, peekBodySize);
     }
 
     public HttpLoggingInterceptor(Logger logger, long peekBodySize) {
-        this(logger, peekBodySize, new HashSet<String>());
-    }
-
-    public HttpLoggingInterceptor(long peekBodySize, Set<String> headersToRemove) {
-        this(DEFAULT_LOGGER, peekBodySize, headersToRemove);
-    }
-
-    public HttpLoggingInterceptor(Logger logger, long peekBodySize, Set<String> headersToRemove) {
         if (logger == null)
             throw new IllegalArgumentException("Can't use null logger");
         if (peekBodySize < 0)
             throw new IllegalArgumentException("peekBodySize can't be negative");
         this.logger = logger;
         this.peekBodySize = peekBodySize;
-        this.headersToRemove = headersToRemove;
     }
 
     /**
@@ -199,76 +175,61 @@ public final class HttpLoggingInterceptor implements Interceptor {
 
     @Override
     public Response intercept(Chain chain) throws IOException {
-
+        StringBuilder logBuilder = new StringBuilder();
+        
         boolean logBody = logger.isDebugEnabled();
-        boolean logHeaders = logBody || logger.isInfoEnabled();
 
         Request request = chain.request();
-
         RequestBody requestBody = request.body();
         boolean hasRequestBody = requestBody != null;
 
         Connection connection = chain.connection();
         Protocol protocol = connection != null ? connection.protocol() : Protocol.HTTP_1_1;
 
-        logger.info("--> {} {} {}", request.method(), request.url(), protocol);
+        // Build request log
+        logBuilder.append("--> REQUEST\n");
+        logBuilder.append("Request Method = ").append(request.method()).append("\n");
+        logBuilder.append("Request URL = ").append(request.url()).append("\n");
+        logBuilder.append("Protocol = ").append(protocol).append("\n");
 
-        if (logHeaders) {
-            if (hasRequestBody) {
-//                 Request body headers are only present when installed as a network interceptor.
-//                 Force them to be included (when available) so there values are known.
-                if (requestBody.contentType() != null && !headersToRemove.contains("Content-Type"))
-                    logger.info("--> Content-Type: {}", requestBody.contentType());
-
-                if (requestBody.contentLength() != -1
-                        && !headersToRemove.contains("Content-Length")
-                )
-                    logger.info("--> Content-Length: {}", requestBody.contentLength());
-            }
-
-            Headers headers = request.headers();
+        // Log request headers
+        Headers headers = request.headers();
+        if (headers.size() > 0) {
+            logBuilder.append("Request Headers:\n");
             for (int i = 0; i < headers.size(); i++) {
-                if (!headersToRemove.contains(headers.name(i))
-                        && !(headers.name(i).equalsIgnoreCase("Content-Type"))
-                        && !(headers.name(i).equalsIgnoreCase("Content-Length"))
-                ) {
-                    logger.info("--> {}: {}", headers.name(i), headers.value(i));
-                }
+                logBuilder.append("  ").append(headers.name(i)).append(": ").append(headers.value(i)).append("\n");
+            }
+        }
+
+        // Log request body info and content
+        if (hasRequestBody) {
+            // Request body headers are only present when installed as a network interceptor.
+            // Force them to be included (when available) so there values are known.
+            if (requestBody.contentType() != null) {
+                logBuilder.append("Content-Type = ").append(requestBody.contentType()).append("\n");
+            }
+            if (requestBody.contentLength() != -1) {
+                logBuilder.append("Content-Length = ").append(requestBody.contentLength()).append("\n");
             }
 
-            if (!logBody || !hasRequestBody)
-                logger.info("--> END {} {} {}", request.method(), request.url(), protocol);
-            else if (bodyEncoded(request.headers()))
-                logger.info("--> END {} {} {} (encoded body omitted)",
-                        request.method(),
-                        request.url(),
-                        protocol
-                );
-            else {
+            if (logBody && !bodyEncoded(request.headers())) {
                 Buffer buffer = new Buffer();
                 requestBody.writeTo(buffer);
 
                 Charset charset = UTF8;
                 MediaType contentType = requestBody.contentType();
-                if (contentType != null)
-                    charset = contentType.charset(UTF8);
+                if (contentType != null && contentType.charset() != null) {
+                    charset = contentType.charset();
+                }
 
-                logger.debug(""); // new line
                 if (isPlaintext(buffer)) {
-                    logger.debug(buffer.readString(charset));
-                    logger.debug("--> END {} {} {} ({}-byte body)",
-                            request.method(),
-                            request.url(),
-                            protocol,
-                            requestBody.contentLength()
-                    );
-                } else
-                    logger.debug("--> END {} {} {} (binary {}-byte body omitted",
-                            request.method(),
-                            request.url(),
-                            protocol,
-                            requestBody.contentLength()
-                    );
+                    String bodyContent = buffer.readString(charset);
+                    logBuilder.append("Request Body = ").append(bodyContent).append("\n");
+                } else {
+                    logBuilder.append("Request Body = (binary ").append(requestBody.contentLength()).append("-byte body omitted)\n");
+                }
+            } else if (bodyEncoded(request.headers())) {
+                logBuilder.append("Request Body = (encoded body omitted)\n");
             }
         }
 
@@ -277,65 +238,61 @@ public final class HttpLoggingInterceptor implements Interceptor {
         try {
             response = chain.proceed(request);
         } catch (Exception e) {
-            logger.info("<-- HTTP FAILED: " + e);
+            // Log request failure
+            logBuilder.append("<-- HTTP FAILED: ").append(e.getMessage()).append("\n");
+            
+            // Log everything collected so far
+            logger.error(logBuilder.toString());
             throw e;
         }
 
         long tookMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
-
         ResponseBody responseBody = response.body();
-        long contentLength = responseBody.contentLength();
-        String bodySize = contentLength != -1 ? contentLength + "-byte" : "unknown-length";
 
-        logger.info("<-- {} {} {} {} (took {} ms {})",
-                response.code(), response.message(), response.request().method(),
-                response.request().url(), tookMs,
-                !logHeaders ? ", " + bodySize + " body" : ""
-        );
+        // Build response log
+        logBuilder.append("<-- RESPONSE\n");
+        logBuilder.append("Response Code = ").append(response.code()).append("\n");
+        logBuilder.append("Response Message = ").append(response.message()).append("\n");
+        logBuilder.append("Time = ").append(tookMs).append(" ms\n");
 
-        if (logHeaders) {
-            Headers headers = response.headers();
-            for (int i = 0; i < headers.size(); i++) {
-                if (!headersToRemove.contains(headers.name(i))) {
-                    logger.info("<-- {}: {}", headers.name(i), headers.value(i));
-                }
-            }
-
-            if (!logBody || !hasBody(response))
-                logger.info("<-- END HTTP {} {}", response.request().method(),
-                        response.request().url()
-                );
-            else if (bodyEncoded(headers))
-                logger.info("<-- END HTTP (encoded body omitted) {} {}",
-                        response.request().method(),
-                        response.request().url()
-                );
-            else {
-                BufferedSource source = responseBody.source();
-                source.request(peekBodySize);
-                Buffer buffer = source.buffer();
-
-                Charset charset = UTF8;
-                MediaType contentType = responseBody.contentType();
-                if (contentType != null)
-                    charset = contentType.charset(UTF8);
-
-                if (!isPlaintext(buffer)) {
-                    logger.debug("");
-                    logger.debug("<-- END HTTP (binary {}-byte body omitted) {} {}", contentLength,
-                            response.request().method(), response.request().url()
-                    );
-                    return response;
-                }
-
-                if (contentLength != 0) {
-                    logger.debug("");
-                    logger.debug(buffer.clone().readString(charset));
-                }
-
-                logger.debug("<-- END HTTP ({}-byte body)", contentLength);
+        // Log response headers
+        Headers responseHeaders = response.headers();
+        if (responseHeaders.size() > 0) {
+            logBuilder.append("Response Headers:\n");
+            for (int i = 0; i < responseHeaders.size(); i++) {
+                logBuilder.append("  ").append(responseHeaders.name(i)).append(": ").append(responseHeaders.value(i)).append("\n");
             }
         }
+
+        // Log response body for failed requests regardless of log level
+        boolean shouldLogResponseBody = logBody || !response.isSuccessful();
+        
+        if (responseBody != null && shouldLogResponseBody && hasBody(response) && !bodyEncoded(responseHeaders)) {
+            BufferedSource source = responseBody.source();
+            source.request(peekBodySize);
+            Buffer buffer = source.buffer();
+
+            Charset charset = UTF8;
+            MediaType contentType = responseBody.contentType();
+            if (contentType != null) {
+                Charset responseCharset = contentType.charset();
+                if (responseCharset != null) {
+                    charset = responseCharset;
+                }
+            }
+
+            long contentLength = responseBody.contentLength();
+            if (!isPlaintext(buffer)) {
+                logBuilder.append("Response Body = (binary ").append(contentLength).append("-byte body omitted)\n");
+            } else if (contentLength != 0) {
+                String responseBodyContent = buffer.clone().readString(charset);
+                logBuilder.append("Response Body = ").append(responseBodyContent).append("\n");
+            }
+        } else if (bodyEncoded(responseHeaders)) {
+            logBuilder.append("Response Body = (encoded body omitted)\n");
+        }
+
+        logger.info(logBuilder.toString());
 
         return response;
     }
